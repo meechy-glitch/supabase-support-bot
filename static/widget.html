@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Supabase Support Bot</title>
+<style>
+  :root {
+    --bg: #0b0f0d;
+    --panel: #11161394;
+    --panel-solid: #0f1411;
+    --border: #1e2a23;
+    --text: #e6f1ea;
+    --muted: #8aa39a;
+    --accent: #3ecf8e;
+    --accent-hover: #34b87b;
+    --user-bubble: #1c2a23;
+    --bot-bubble: #0f1411;
+    --danger: #ff7676;
+    --radius: 14px;
+    --shadow: 0 20px 60px rgba(0,0,0,0.45);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+    color: var(--text);
+    background:
+      radial-gradient(1200px 600px at 80% -10%, rgba(62,207,142,0.10), transparent 60%),
+      radial-gradient(800px 400px at -10% 110%, rgba(62,207,142,0.06), transparent 60%),
+      var(--bg);
+    -webkit-font-smoothing: antialiased;
+  }
+  .page {
+    max-width: 760px;
+    margin: 0 auto;
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    padding: 32px 20px 20px;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 18px;
+  }
+  .logo {
+    width: 34px; height: 34px; border-radius: 8px;
+    background: linear-gradient(135deg, var(--accent), #2a8d62);
+    display: grid; place-items: center;
+    color: #06140d; font-weight: 800; font-size: 18px;
+    box-shadow: 0 4px 18px rgba(62,207,142,0.35);
+  }
+  h1 { font-size: 17px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  .subtitle { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent); box-shadow: 0 0 10px var(--accent);
+    margin-left: auto;
+  }
+
+  #chat {
+    flex: 1;
+    overflow-y: auto;
+    padding-right: 4px;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .msg { max-width: 88%; }
+  .msg .bubble {
+    padding: 12px 14px;
+    border-radius: var(--radius);
+    line-height: 1.5;
+    font-size: 14.5px;
+    border: 1px solid var(--border);
+    word-wrap: break-word;
+  }
+  .msg.user { align-self: flex-end; }
+  .msg.user .bubble {
+    background: var(--user-bubble);
+    border-color: #2a3d33;
+    border-bottom-right-radius: 4px;
+  }
+  .msg.bot { align-self: flex-start; }
+  .msg.bot .bubble {
+    background: var(--bot-bubble);
+    border-bottom-left-radius: 4px;
+  }
+  .msg.bot .bubble code {
+    background: #182520; padding: 1px 5px; border-radius: 4px;
+    font-size: 13px; font-family: "JetBrains Mono", SFMono-Regular, Menlo, monospace;
+  }
+  .msg.bot .bubble pre {
+    background: #182520; padding: 10px 12px; border-radius: 8px;
+    overflow-x: auto; font-size: 13px;
+    font-family: "JetBrains Mono", SFMono-Regular, Menlo, monospace;
+    margin: 8px 0;
+  }
+  .sources {
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .sources .label { display: block; margin-bottom: 4px; }
+  .sources a {
+    display: block;
+    color: var(--accent);
+    text-decoration: none;
+    padding: 3px 0;
+    word-break: break-all;
+  }
+  .sources a:hover { text-decoration: underline; }
+
+  .typing {
+    display: inline-flex; gap: 4px; padding: 4px 2px;
+  }
+  .typing span {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--muted);
+    animation: blink 1.2s infinite ease-in-out;
+  }
+  .typing span:nth-child(2) { animation-delay: 0.2s; }
+  .typing span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes blink {
+    0%, 80%, 100% { opacity: 0.3; transform: translateY(0); }
+    40% { opacity: 1; transform: translateY(-2px); }
+  }
+
+  form {
+    margin-top: 16px;
+    display: flex; gap: 8px;
+    background: var(--panel-solid);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 8px;
+    box-shadow: var(--shadow);
+  }
+  textarea {
+    flex: 1;
+    background: transparent; border: 0; outline: none;
+    color: var(--text);
+    font: inherit; font-size: 14.5px;
+    resize: none;
+    padding: 8px 10px;
+    min-height: 22px; max-height: 140px;
+    line-height: 1.4;
+  }
+  textarea::placeholder { color: var(--muted); }
+  button {
+    background: var(--accent); color: #06140d;
+    border: 0; border-radius: 10px;
+    padding: 0 16px; height: 40px; align-self: flex-end;
+    font-weight: 600; cursor: pointer;
+    transition: background 120ms ease;
+  }
+  button:hover:not(:disabled) { background: var(--accent-hover); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .hint {
+    text-align: center;
+    color: var(--muted);
+    font-size: 11px;
+    margin-top: 10px;
+  }
+  .empty-state {
+    text-align: center;
+    color: var(--muted);
+    padding: 32px 8px;
+  }
+  .empty-state h2 { color: var(--text); font-size: 16px; margin: 0 0 6px; font-weight: 600; }
+  .examples {
+    display: flex; flex-wrap: wrap; gap: 8px; justify-content: center;
+    margin-top: 16px;
+  }
+  .examples button {
+    background: transparent; color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 999px; padding: 7px 12px; height: auto;
+    font-size: 12.5px; font-weight: 400;
+  }
+  .examples button:hover { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <div class="logo">S</div>
+    <div>
+      <h1>Supabase Support Bot</h1>
+      <div class="subtitle">Answers grounded in the public Supabase docs</div>
+    </div>
+    <div class="status-dot" title="online"></div>
+  </header>
+
+  <div id="chat">
+    <div class="empty-state" id="empty">
+      <h2>Ask me anything about Supabase</h2>
+      <div>I'll cite the docs pages I used. If I don't know, I'll tell you.</div>
+      <div class="examples">
+        <button type="button" data-q="How do I enable row level security on a table?">Enable RLS</button>
+        <button type="button" data-q="How do I sign up a user with email and password using supabase-js?">Email signup</button>
+        <button type="button" data-q="How do I create a storage bucket?">Create a bucket</button>
+      </div>
+    </div>
+  </div>
+
+  <form id="form">
+    <textarea id="input" placeholder="Ask a question about Supabase…" rows="1" autofocus></textarea>
+    <button id="send" type="submit">Send</button>
+  </form>
+  <div class="hint">Press Enter to send, Shift+Enter for newline</div>
+</div>
+
+<script>
+  const chatEl = document.getElementById('chat');
+  const form = document.getElementById('form');
+  const input = document.getElementById('input');
+  const sendBtn = document.getElementById('send');
+  const emptyState = document.getElementById('empty');
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>"']/g, c => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[c]));
+  }
+  function renderMarkdownish(s) {
+    let html = escapeHtml(s);
+    html = html.replace(/```([\s\S]*?)```/g, (_, code) => `<pre>${code.trim()}</pre>`);
+    html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\n\n/g, '<br><br>').replace(/\n/g, '<br>');
+    return html;
+  }
+
+  function appendMessage(role, content) {
+    if (emptyState && emptyState.parentNode) emptyState.remove();
+    const wrap = document.createElement('div');
+    wrap.className = 'msg ' + role;
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    wrap.appendChild(bubble);
+    if (typeof content === 'string') bubble.innerHTML = renderMarkdownish(content);
+    else bubble.appendChild(content);
+    chatEl.appendChild(wrap);
+    chatEl.scrollTop = chatEl.scrollHeight;
+    return bubble;
+  }
+
+  function typingIndicator() {
+    const el = document.createElement('div');
+    el.className = 'typing';
+    el.innerHTML = '<span></span><span></span><span></span>';
+    return el;
+  }
+
+  function renderSources(urls) {
+    if (!urls || !urls.length) return '';
+    const links = urls.map(u =>
+      `<a href="${u}" target="_blank" rel="noopener">${u.replace('https://supabase.com','')}</a>`
+    ).join('');
+    return `<div class="sources"><span class="label">Sources</span>${links}</div>`;
+  }
+
+  async function ask(question) {
+    appendMessage('user', question);
+    const bubble = appendMessage('bot', '');
+    bubble.appendChild(typingIndicator());
+    sendBtn.disabled = true;
+    try {
+      const resp = await fetch('/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: question })
+      });
+      if (!resp.ok) {
+        const detail = await resp.text();
+        bubble.innerHTML = `<span style="color:var(--danger)">Error ${resp.status}: ${escapeHtml(detail)}</span>`;
+        return;
+      }
+      const data = await resp.json();
+      bubble.innerHTML = renderMarkdownish(data.answer || '(empty response)') + renderSources(data.sources);
+    } catch (err) {
+      bubble.innerHTML = `<span style="color:var(--danger)">Network error: ${escapeHtml(String(err))}</span>`;
+    } finally {
+      sendBtn.disabled = false;
+      input.focus();
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }
+  }
+
+  input.addEventListener('input', () => {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 140) + 'px';
+  });
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      form.requestSubmit();
+    }
+  });
+  form.addEventListener('submit', e => {
+    e.preventDefault();
+    const q = input.value.trim();
+    if (!q) return;
+    input.value = ''; input.style.height = 'auto';
+    ask(q);
+  });
+  document.querySelectorAll('.examples button').forEach(btn => {
+    btn.addEventListener('click', () => ask(btn.dataset.q));
+  });
+</script>
+</body>
+</html>
