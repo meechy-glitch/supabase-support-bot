@@ -1,123 +1,72 @@
 # Supabase Support Bot
 
-A RAG demo: a FastAPI service that answers questions about Supabase using its
-public documentation as the only source of truth, plus an embeddable chat
-widget. Built as a sales demo to show how a docs-trained support bot looks for
-a real B2B SaaS product.
+**An AI support assistant that answers questions from Supabase's documentation in seconds — and links to the exact docs page behind every answer.**
 
-- **LLM + embeddings:** Google Gemini (Flash + embedding-001) via `google-genai`
-- **Vector store:** Chroma, bring-your-own-embeddings, committed to the repo
-- **Runtime:** FastAPI, designed to fit on Render's free tier (512MB RAM)
+🔗 **Live demo:** https://supabase-support-bot.onrender.com
 
-The bot answers ONLY from retrieved Supabase docs context and says so plainly
-when the docs don't cover a question — no hallucinated APIs.
+> _First load may take ~30s — the demo runs on a free instance that sleeps when idle._
 
-## Architecture
+<!-- Add a screenshot or GIF of the widget answering a question here.
+     Drag an image into the GitHub README editor, or commit it to /assets and link it:
+     ![Demo](assets/demo.gif) -->
 
-```
-app/config.py      Settings loaded from .env via pydantic-settings
-app/llm.py         Gemini client wrapper: embed_text() and generate()
-app/vectorstore.py Chroma query by embedding
-app/rag.py         Retrieve top-k, build grounded prompt, generate answer
-app/main.py        FastAPI: /health, /chat, serves static/widget.html at /
+## What it does
 
-ingest/scrape.py   Sitemap + page fetch (article selector)
-ingest/chunk.py    ~800 char chunks with ~100 char overlap
-ingest/ingest.py   scrape -> chunk -> embed -> store in Chroma
+Developers integrating a tool burn a lot of time hunting through documentation for answers that are already written down. This assistant reads a product's docs, finds the most relevant sections for any question, and answers in plain language — grounded entirely in the documentation, with citations. If the answer isn't in the docs, it says so rather than inventing one.
 
-static/widget.html Embeddable chat widget (vanilla JS, no build step)
-data/chroma/       Persisted vector store (committed)
-tests/             pytest: chunker, /health, /chat (Gemini mocked)
-```
+It's built here as a demo over **Supabase's public documentation** (~119 pages, ~970 indexed sections). The same system can be trained on any product's docs.
 
-## Local setup
+## How it works
 
-Requires **Python 3.11**.
+A retrieval-augmented generation (RAG) pipeline:
+
+1. **Ingest** — scrapes the documentation from its sitemap, splits it into overlapping chunks, embeds each chunk, and stores them in a vector database. Runs once, offline; the vector store ships with the app.
+2. **Retrieve** — embeds the user's question and pulls the most semantically relevant chunks.
+3. **Generate** — passes those chunks to an LLM with strict instructions to answer *only* from the provided context, then returns the answer plus the source URLs it used.
+
+## Stack
+
+| Layer | Choice |
+|-------|--------|
+| API | FastAPI (async) — `/chat` and `/health`, CORS-enabled |
+| Vector store | Chroma (bring-your-own-embeddings) |
+| Embeddings + generation | Google Gemini |
+| Frontend | Embeddable vanilla-JS chat widget |
+| Tests | pytest |
+| Deploy | Docker on Render |
+
+## Run locally
 
 ```bash
-python3.11 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+git clone https://github.com/meechy-glitch/supabase-support-bot.git
+cd supabase-support-bot
+python3.11 -m venv venv && source venv/bin/activate
+make install
 ```
 
-Create a `.env` file in the repo root:
+Add a free [Google AI Studio](https://aistudio.google.com) key to `.env`:
 
-```
-GEMINI_API_KEY=...your free-tier Gemini key...
+```bash
+GEMINI_API_KEY=your_key_here
 GEMINI_CHAT_MODEL=gemini-2.5-flash
 GEMINI_EMBED_MODEL=gemini-embedding-001
 TOP_K=5
-DOCS_SITEMAP=https://supabase.com/docs/sitemap.xml
-MAX_PAGES=200
 ```
 
-## Ingest (runs locally, commit the result)
-
-The vector store is built locally and committed to the repo. The deployed
-server only **reads** from it — it never scrapes at request time.
+Then build the index and run it:
 
 ```bash
-# pilot: 5 pages
-python -m ingest.ingest --limit 5 --reset
-
-# full ingest from scratch (wipes the collection first)
-python -m ingest.ingest --reset
-
-# idempotent top-up (skips URLs whose chunks are already in Chroma)
-python -m ingest.ingest
-# or equivalently:
-make resume
+make ingest    # scrape + embed the docs into the vector store (one-time)
+make serve     # start the API + widget at http://localhost:8000
+make test      # run the test suite
 ```
 
-`data/chroma/` will be created/updated. Commit it.
+## A note on the free tier
 
-### Quota note
+The embedding model's free tier caps at 1,000 requests/day, so the full ingest is split across runs. `make resume` skips already-indexed pages and embeds only what's left, so you can finish the index over two days without re-spending quota. The deployed app only *reads* the vector store — it never re-scrapes — so day-to-day running cost is effectively zero.
 
-Gemini's free tier caps `gemini-embedding-001` at **1000 embed_content
-requests per day**. A full 200-page ingest produces roughly that many chunks,
-so the ingest will hit the daily limit. When it does, the script raises a
-`google.genai.errors.ClientError: 429 RESOURCE_EXHAUSTED` and exits.
+---
 
-The ingest is **idempotent**: each chunk is stored with id `f"{url}#{j}"`, and
-the script skips any URL whose `url#0` is already present in the collection.
-So after the quota resets (~24h), simply re-run `make resume` (or
-`python -m ingest.ingest`) to top up the remaining pages without re-embedding
-the ones already indexed.
+### Want one trained on your product's docs?
 
-## Run the server locally
-
-```bash
-uvicorn app.main:app --reload
-```
-
-- `http://localhost:8000/`         → chat widget
-- `GET /health`                    → `{"status":"ok"}`
-- `POST /chat` `{"message": str}`  → `{"answer": str, "sources": [url, ...]}`
-
-## Tests
-
-```bash
-pytest -q
-```
-
-The Gemini call inside `/chat` is mocked, so tests do not consume API quota.
-
-## Deploy to Render (free tier)
-
-1. Push the repo to GitHub. Make sure `data/chroma/` is committed.
-2. On Render, create a new **Web Service** from the repo.
-3. Render auto-detects the `Dockerfile`. No build command override needed.
-4. Set environment variables in Render:
-   - `GEMINI_API_KEY`
-   - `GEMINI_CHAT_MODEL=gemini-2.5-flash`
-   - `GEMINI_EMBED_MODEL=gemini-embedding-001`
-   - `TOP_K=5` (optional)
-5. Render injects `PORT`; the Dockerfile binds uvicorn to `0.0.0.0:${PORT}`.
-6. Render's free tier health check works because `/health` accepts both GET and HEAD.
-
-## Constraints (by design)
-
-- Zero cost — free tiers only, no paid APIs or paid infra.
-- Gemini Flash models only (Pro is paywalled).
-- Chroma in bring-your-own-embeddings mode — never pulls a local embedding
-  model at runtime, so the deployed runtime stays lean.
+This is a working template for any documentation-heavy product. If you'd like a support assistant trained on your own docs, reach out — [LinkedIn](https://www.linkedin.com/in/mitchell-ebosele-148656292).
