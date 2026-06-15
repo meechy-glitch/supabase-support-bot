@@ -1,6 +1,7 @@
 import time
 
 from google import genai
+from google.genai import errors as genai_errors
 from groq import APIConnectionError, APIStatusError, Groq
 
 from app.config import settings
@@ -16,12 +17,31 @@ class UpstreamUnavailableError(Exception):
     """Raised when the Groq chat model stays unreachable after all retries."""
 
 
+def _is_transient_embed(exc: Exception) -> bool:
+    """True for retryable Gemini failures: any 5xx, or a 429 rate/quota response."""
+    if isinstance(exc, genai_errors.ServerError):
+        return True
+    if isinstance(exc, genai_errors.APIError):
+        return getattr(exc, "code", None) == 429
+    return False
+
+
 def embed_text(text: str) -> list[float]:
-    resp = _gemini.models.embed_content(
-        model=settings.gemini_embed_model,
-        contents=text,
-    )
-    return list(resp.embeddings[0].values)
+    last_exc: Exception | None = None
+    for attempt in range(_MAX_ATTEMPTS):
+        try:
+            resp = _gemini.models.embed_content(
+                model=settings.gemini_embed_model,
+                contents=text,
+            )
+            return list(resp.embeddings[0].values)
+        except Exception as exc:
+            if not _is_transient_embed(exc):
+                raise
+            last_exc = exc
+            if attempt < _MAX_ATTEMPTS - 1:
+                time.sleep(_BACKOFF_SECONDS[attempt])
+    raise last_exc
 
 
 def _is_transient(exc: Exception) -> bool:

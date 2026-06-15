@@ -10,13 +10,20 @@ import sqlite3
 import time
 
 import chromadb
+from google.genai import errors as genai_errors
 
 from app.config import settings
 from app.llm import embed_text
 from ingest.chunk import chunk_text
-from ingest.scrape import fetch_doc_urls, fetch_page_text, _session
+from ingest.scrape import crawl_doc_urls, fetch_page_text, _session
 
 EMBED_DELAY_SECONDS = 0.15  # respect free-tier rate limits
+EST_CHUNKS_PER_PAGE = 8  # rough projection for dry-run cost estimates
+
+
+def _is_quota_error(exc: Exception) -> bool:
+    """True for a Gemini free-tier quota/rate exhaustion (HTTP 429)."""
+    return isinstance(exc, genai_errors.APIError) and getattr(exc, "code", None) == 429
 
 
 def _get_collection() -> chromadb.api.models.Collection.Collection:
@@ -84,30 +91,36 @@ def flush_vector_index(collection: chromadb.api.models.Collection.Collection) ->
 
 def verify_retrieval(
     collection: chromadb.api.models.Collection.Collection,
-    probe: str = "How do I create a storage bucket?",
+    probe: str = "how do I create a storage bucket",
 ) -> bool:
-    """Embed a probe about a newly-indexed topic and confirm the persisted
-    index returns a relevant chunk. Prints a PASS/FAIL line and returns the
-    result so callers can set an exit status.
+    """Embed a probe about a newly-indexed topic and confirm the persisted index
+    returns the storage-bucket page in its top 3 results. Prints the top sources
+    and a PASS/FAIL line; PASS requires the index be synced to disk AND a source
+    matching /storage/buckets or containing 'creating-buckets'.
     """
     synced = _vector_index_synced()
     hits = collection.query(
         query_embeddings=[embed_text(probe)],
-        n_results=settings.top_k,
-        include=["documents", "metadatas"],
+        n_results=3,
+        include=["metadatas"],
     )
     sources = [m.get("source", "") for m in hits["metadatas"][0]]
-    relevant = any("storage" in s for s in sources)
+    relevant = any("/storage/buckets" in s or "creating-buckets" in s for s in sources)
     ok = synced and relevant
     print(f"[verify] vector index synced to disk: {synced}")
-    print(f"[verify] probe {probe!r} -> top sources:")
+    print(f"[verify] probe {probe!r} -> top 3 sources:")
     for src in sources:
         print(f"           {src}")
-    print(f"[verify] {'PASS' if ok else 'FAIL'}: new chunks searchable from persisted index")
+    print(f"[verify] {'PASS' if ok else 'FAIL'}: storage-bucket page retrievable from persisted index")
     return ok
 
 
-def run(limit: int | None = None, reset: bool = False, repair: bool = False) -> None:
+def run(
+    limit: int | None = None,
+    reset: bool = False,
+    repair: bool = False,
+    dry_run: bool = False,
+) -> None:
     collection = _get_collection()
     if repair:
         print("[repair] forcing HNSW snapshot to persist all stored vectors")
@@ -121,37 +134,70 @@ def run(limit: int | None = None, reset: bool = False, repair: bool = False) -> 
         collection = _get_collection()
 
     session = _session()
-    urls = fetch_doc_urls(session)
+    print(f"[crawl] discovering /docs URLs (depth={settings.depth}, max_pages={settings.max_pages})")
+    urls = crawl_doc_urls(session)
     if limit is not None:
         urls = urls[:limit]
 
     existing_ids = set(collection.get(include=[])["ids"])
-    print(f"[ingest] will process {len(urls)} url(s); {len(existing_ids)} chunks already indexed")
+    new_urls = [u for u in urls if f"{u}#0" not in existing_ids]
+    already_indexed = len(urls) - len(new_urls)
+    # Prioritize the known gap: embed /storage/ pages first so they land inside
+    # the day-1 quota window even if a 429 cuts the run short. Stable sort keeps
+    # BFS order within each group.
+    new_urls.sort(key=lambda u: 0 if "/storage/" in u else 1)
+    print(f"[crawl] discovered {len(urls)} URL(s); {already_indexed} already indexed, {len(new_urls)} new")
+
+    if dry_run:
+        est_chunks = len(new_urls) * EST_CHUNKS_PER_PAGE
+        print("[dry-run] no embedding will be performed.")
+        print(f"[dry-run] new URLs not yet in index: {len(new_urls)}")
+        print(f"[dry-run] projected new chunks (~{EST_CHUNKS_PER_PAGE}/page): {est_chunks}")
+        print(f"[dry-run] projected Gemini embedding calls: {est_chunks}")
+        print("[dry-run] projected cost: $0.00 (Gemini free tier; cost is rate-limited quota, not dollars)")
+        print("[dry-run] sample of new URLs:")
+        for url in new_urls[:15]:
+            print(f"           {url}")
+        if len(new_urls) > 15:
+            print(f"           ... and {len(new_urls) - 15} more")
+        return
+
     total_chunks = 0
-    for i, url in enumerate(urls, start=1):
-        if f"{url}#0" in existing_ids:
-            print(f"[{i}/{len(urls)}] skip (already indexed): {url}")
-            continue
+    newly_embedded = 0
+    stopped_early = False
+    stop_reason = ""
+    for i, url in enumerate(new_urls, start=1):
         page = fetch_page_text(url, session)
         if page is None:
-            print(f"[{i}/{len(urls)}] skip (empty): {url}")
+            print(f"[{i}/{len(new_urls)}] skip (empty): {url}")
             continue
         title, text = page
         chunks = chunk_text(text)
         if not chunks:
-            print(f"[{i}/{len(urls)}] skip (no chunks): {url}")
+            print(f"[{i}/{len(new_urls)}] skip (no chunks): {url}")
             continue
 
         ids: list[str] = []
         documents: list[str] = []
         embeddings: list[list[float]] = []
         metadatas: list[dict] = []
-        for j, ch in enumerate(chunks):
-            ids.append(f"{url}#{j}")
-            documents.append(ch)
-            embeddings.append(embed_text(ch))
-            metadatas.append({"source": url, "title": title, "chunk_index": j})
-            time.sleep(EMBED_DELAY_SECONDS)
+        try:
+            for j, ch in enumerate(chunks):
+                ids.append(f"{url}#{j}")
+                documents.append(ch)
+                embeddings.append(embed_text(ch))
+                metadatas.append({"source": url, "title": title, "chunk_index": j})
+                time.sleep(EMBED_DELAY_SECONDS)
+        except genai_errors.APIError as exc:
+            # Reaches here only after embed_text() has exhausted its retries, so
+            # this is a sustained failure (daily quota at 429, or a prolonged
+            # outage at 5xx). Drop this partial page (never upserted, so url#0
+            # stays absent and `make resume` re-embeds it cleanly) and stop
+            # before burning further failed calls.
+            stop_reason = "quota" if _is_quota_error(exc) else f"service error {getattr(exc, 'code', '?')}"
+            print(f"[{i}/{len(new_urls)}] Gemini {stop_reason} on {url} — stopping cleanly")
+            stopped_early = True
+            break
 
         collection.upsert(
             ids=ids,
@@ -160,16 +206,32 @@ def run(limit: int | None = None, reset: bool = False, repair: bool = False) -> 
             metadatas=metadatas,
         )
         total_chunks += len(chunks)
-        print(f"[{i}/{len(urls)}] {title[:60]!r:62} chunks={len(chunks)} (total={total_chunks})")
+        newly_embedded += 1
+        print(f"[{i}/{len(new_urls)}] {title[:60]!r:62} chunks={len(chunks)} (total={total_chunks})")
 
     if total_chunks:
         # Persist the tail of this run: a batch smaller than the sync threshold
         # would otherwise stay in the WAL and never reach the on-disk snapshot.
         flush_vector_index(collection)
-    print(f"[ingest] done. total chunks indexed: {total_chunks}")
-    print(f"[ingest] collection count: {collection.count()}")
-    if total_chunks:
+    remaining = len(new_urls) - newly_embedded
+    print(f"[ingest] stopped early ({stop_reason})." if stopped_early else "[ingest] done.")
+    print(f"[ingest]   total URLs discovered: {len(urls)}")
+    print(f"[ingest]   already indexed:       {already_indexed}")
+    print(f"[ingest]   newly embedded pages:  {newly_embedded} ({total_chunks} chunks)")
+    print(f"[ingest]   remaining new pages:   {remaining}")
+    print(f"[ingest]   final collection count: {collection.count()}")
+    if stopped_early:
+        when = ("tomorrow after the Gemini quota resets" if stop_reason == "quota"
+                else "once Gemini recovers (a 5xx is transient — likely shortly)")
+        print(f"[ingest] {remaining} page(s) still unembedded. Run `make resume` {when} "
+              "— skip-already-indexed will pick up where this left off.")
+    # verify_retrieval embeds a probe; skip it when we stopped on exhausted quota
+    # (there's no embed budget left) — run it on the next successful resume.
+    if total_chunks and not (stopped_early and stop_reason == "quota"):
         verify_retrieval(collection)
+    elif stopped_early and stop_reason == "quota":
+        print("[ingest] skipping verify_retrieval: embed quota exhausted. "
+              "It will run automatically on the next `make resume`.")
 
 
 def main() -> None:
@@ -181,8 +243,13 @@ def main() -> None:
         action="store_true",
         help="re-persist the HNSW index from stored embeddings (no scrape, no embedding cost)",
     )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="crawl and report new URLs + projected embedding cost without embedding",
+    )
     args = p.parse_args()
-    run(limit=args.limit, reset=args.reset, repair=args.repair)
+    run(limit=args.limit, reset=args.reset, repair=args.repair, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":
