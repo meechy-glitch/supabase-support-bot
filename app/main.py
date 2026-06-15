@@ -2,9 +2,10 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 
+from app.llm import UpstreamUnavailableError
 from app.rag import answer_question
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
@@ -48,6 +49,15 @@ def root() -> FileResponse:
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(req: ChatRequest) -> ChatResponse:
-    result = answer_question(req.message)
+def chat(req: ChatRequest) -> ChatResponse | JSONResponse:
+    try:
+        result = answer_question(req.message)
+    except UpstreamUnavailableError:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "answer": "The assistant is briefly unavailable. Please try again in a moment.",
+                "sources": [],
+            },
+        )
     return ChatResponse(answer=result.answer, sources=result.sources)

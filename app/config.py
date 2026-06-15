@@ -11,8 +11,10 @@ class Settings(BaseSettings):
     )
 
     gemini_api_key: str
-    gemini_chat_model: str = "gemini-2.5-flash"
     gemini_embed_model: str = "gemini-embedding-001"
+
+    groq_api_key: str
+    groq_chat_model: str = "llama-3.3-70b-versatile"
 
     top_k: int = 5
     docs_sitemap: str = "https://supabase.com/docs/sitemap.xml"

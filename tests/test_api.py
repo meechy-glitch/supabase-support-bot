@@ -1,13 +1,21 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
+from groq import InternalServerError
 
-from app import rag
+from app import llm, rag
 from app.main import app
 from app.rag import Answer
 
 client = TestClient(app)
+
+
+def _make_503() -> InternalServerError:
+    request = httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions")
+    response = httpx.Response(503, request=request)
+    return InternalServerError("service unavailable", response=response, body=None)
 
 
 def test_health_get():
@@ -47,3 +55,23 @@ def test_chat_rejects_empty_message():
 def test_chat_rejects_malformed_payload(payload):
     resp = client.post("/chat", json=payload)
     assert resp.status_code == 422
+
+
+def test_chat_returns_503_when_groq_keeps_failing():
+    # Retrieval is on Gemini/Chroma; mock those so only the Groq call is exercised.
+    failing_create = MagicMock(side_effect=_make_503())
+    with (
+        patch.object(rag, "embed_text", return_value=[0.0, 0.1, 0.2]),
+        patch.object(rag, "query_by_embedding", return_value=[]),
+        patch.object(llm._groq.chat.completions, "create", failing_create),
+        patch.object(llm.time, "sleep"),  # don't actually back off in the test
+    ):
+        resp = client.post("/chat", json={"message": "How do I enable RLS?"})
+
+    assert resp.status_code == 503
+    assert failing_create.call_count == 3  # three Groq attempts before giving up
+    body = resp.json()
+    assert body == {
+        "answer": "The assistant is briefly unavailable. Please try again in a moment.",
+        "sources": [],
+    }
