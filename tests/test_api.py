@@ -58,7 +58,8 @@ def test_chat_rejects_malformed_payload(payload):
 
 
 def test_chat_returns_503_when_groq_keeps_failing():
-    # Retrieval is on Gemini/Chroma; mock those so only the Groq call is exercised.
+    # Retrieval embeds locally (sentence-transformers) + queries Chroma; mock both
+    # so only the Groq call is exercised.
     failing_create = MagicMock(side_effect=_make_503())
     with (
         patch.object(rag, "embed_text", return_value=[0.0, 0.1, 0.2]),

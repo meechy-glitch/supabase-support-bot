@@ -15,6 +15,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
 
+# Bake the sentence-transformers weights (~420MB) into the image so the model
+# loads from the local HuggingFace cache at startup instead of downloading on
+# every cold start. Must match _EMBED_MODEL_NAME in app/llm.py.
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-mpnet-base-v2')"
+
 COPY app/ ./app/
 COPY ingest/ ./ingest/
 COPY static/ ./static/

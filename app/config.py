@@ -10,9 +10,6 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    gemini_api_key: str
-    gemini_embed_model: str = "gemini-embedding-001"
-
     groq_api_key: str
     groq_chat_model: str = "llama-3.3-70b-versatile"
 
@@ -24,7 +21,7 @@ class Settings(BaseSettings):
     depth: int = 2
 
     chroma_path: Path = Path("data/chroma")
-    chroma_collection: str = "supabase_docs"
+    chroma_collection: str = "supabase_docs_mpnet"
 
 
 settings = Settings()

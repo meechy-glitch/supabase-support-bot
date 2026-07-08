@@ -1,8 +1,9 @@
 fastapi==0.136.3
 uvicorn[standard]==0.48.0
 chromadb==1.5.9
-google-genai==2.7.0
+google-genai==2.7.0  # still imported by ingest/ingest.py for Gemini error typing
 groq==1.4.0
+sentence-transformers==5.6.0
 requests==2.34.2
 beautifulsoup4==4.14.3
 lxml==6.1.1

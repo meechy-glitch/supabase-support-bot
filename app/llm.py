@@ -1,12 +1,17 @@
 import time
 
-from google import genai
-from google.genai import errors as genai_errors
 from groq import APIConnectionError, APIStatusError, Groq
+from sentence_transformers import SentenceTransformer
 
 from app.config import settings
 
-_gemini = genai.Client(api_key=settings.gemini_api_key)
+# all-mpnet-base-v2 produces 768-dim embeddings, matching the vectors the Chroma
+# index was built with (gemini-embedding-001), so the existing store stays valid
+# and no re-ingestion is needed. Loaded once at import so the ~420MB model is not
+# rebuilt on every request. Weights come from the local HuggingFace cache (baked
+# into the image at build time; see Dockerfile).
+_EMBED_MODEL_NAME = "all-mpnet-base-v2"
+_embed_model = SentenceTransformer(_EMBED_MODEL_NAME)
 _groq = Groq(api_key=settings.groq_api_key)
 
 _MAX_ATTEMPTS = 3
@@ -17,31 +22,9 @@ class UpstreamUnavailableError(Exception):
     """Raised when the Groq chat model stays unreachable after all retries."""
 
 
-def _is_transient_embed(exc: Exception) -> bool:
-    """True for retryable Gemini failures: any 5xx, or a 429 rate/quota response."""
-    if isinstance(exc, genai_errors.ServerError):
-        return True
-    if isinstance(exc, genai_errors.APIError):
-        return getattr(exc, "code", None) == 429
-    return False
-
-
 def embed_text(text: str) -> list[float]:
-    last_exc: Exception | None = None
-    for attempt in range(_MAX_ATTEMPTS):
-        try:
-            resp = _gemini.models.embed_content(
-                model=settings.gemini_embed_model,
-                contents=text,
-            )
-            return list(resp.embeddings[0].values)
-        except Exception as exc:
-            if not _is_transient_embed(exc):
-                raise
-            last_exc = exc
-            if attempt < _MAX_ATTEMPTS - 1:
-                time.sleep(_BACKOFF_SECONDS[attempt])
-    raise last_exc
+    """Embed a single string locally with all-mpnet-base-v2 (768 dims)."""
+    return _embed_model.encode(text).tolist()
 
 
 def _is_transient(exc: Exception) -> bool:
