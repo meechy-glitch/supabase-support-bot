@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     )
 
     groq_api_key: str
-    groq_chat_model: str = "llama-3.3-70b-versatile"
+    groq_chat_model: str = "qwen/qwen3.6-27b"
 
     top_k: int = 5
     docs_sitemap: str = "https://supabase.com/docs/sitemap.xml"

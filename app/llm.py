@@ -45,6 +45,7 @@ def generate(system_instruction: str, user_prompt: str) -> str:
                     {"role": "system", "content": system_instruction},
                     {"role": "user", "content": user_prompt},
                 ],
+                extra_body={"thinking": {"type": "disabled"}},
                 temperature=0.2,
             )
             return resp.choices[0].message.content or ""
